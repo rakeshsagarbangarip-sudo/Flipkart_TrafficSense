@@ -20,7 +20,9 @@ export const put  = (path, body) => api(path, { method: 'PUT', body })
 
 // WebSocket for live feed
 export function connectLive(onMessage) {
-  const ws = new WebSocket(`ws://localhost:8000/ws/live`)
+  const ws = new WebSocket(
+  "wss://flipkart-trafficsense-2-7b7e.onrender.com/ws/live"
+  )
   ws.onmessage = (e) => onMessage(JSON.parse(e.data))
   ws.onerror = () => console.warn('WS disconnected')
   return ws
