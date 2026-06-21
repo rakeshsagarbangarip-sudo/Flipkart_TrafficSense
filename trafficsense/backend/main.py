@@ -135,6 +135,29 @@ def get_planned_event(event_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Event not found")
     return _planned_detail(ev)
 
+@app.delete("/planned/{event_id}", tags=["Planned Events"])
+def delete_planned(event_id: str, db: Session = Depends(get_db)):
+    """
+    Permanently delete a planned event.
+    """
+    ev = db.query(PlannedEvent).filter(
+        PlannedEvent.id == event_id
+    ).first()
+
+    if not ev:
+        raise HTTPException(
+            status_code=404,
+            detail="Event not found"
+        )
+
+    db.delete(ev)
+    db.commit()
+
+    return {
+        "success": True,
+        "message": "Planned event deleted successfully",
+        "deleted_id": event_id
+    }
 
 @app.put("/planned/{event_id}/approve", tags=["Planned Events"])
 async def approve_planned_event(event_id: str, payload: ApprovalAction, db: Session = Depends(get_db)):
