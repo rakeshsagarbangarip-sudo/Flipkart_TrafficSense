@@ -25,7 +25,7 @@ export async function api(path, options = {}) {
   return res.json()
 }
 
-export const get = (path) => api(path)
+export const get = (path, options = {}) => api(path, options)
 
 export const post = (path, body) =>
   api(path, {

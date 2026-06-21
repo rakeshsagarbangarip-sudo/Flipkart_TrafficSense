@@ -301,6 +301,11 @@ p {
   box-shadow: 0 0 0 3px rgba(40, 116, 240, 0.12);
 }
 
+.control:read-only {
+  background: #f8fafc;
+  color: #334155;
+}
+
 textarea.control {
   min-height: 86px;
   resize: vertical;
@@ -367,6 +372,12 @@ textarea.control {
   border: 1px solid #bbf7d0;
   background: #f0fdf4;
   color: #166534;
+}
+
+.alert.info {
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
 }
 
 .metric-grid {

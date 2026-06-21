@@ -12,7 +12,10 @@ import json
 import csv
 import io
 import os
+import math
 from datetime import datetime, timezone
+from functools import lru_cache
+from pathlib import Path
 from typing import List, Optional
 
 from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect
@@ -45,6 +48,14 @@ create_tables()
 # Live WebSocket connections (for dashboard real-time feed)
 _ws_clients: List[WebSocket] = []
 
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+LOCATION_DATASETS = {
+    "planned": DATA_DIR / "planned_events_clean.csv",
+    "unplanned": DATA_DIR / "unplanned_events_clean.csv",
+}
+
+LOCATION_FIELDS = ("corridor", "zone", "junction", "police_station", "address")
+
 async def broadcast(event: dict):
     dead = []
     for ws in _ws_clients:
@@ -54,6 +65,111 @@ async def broadcast(event: dict):
             dead.append(ws)
     for ws in dead:
         _ws_clients.remove(ws)
+
+
+@lru_cache(maxsize=2)
+def _load_location_dataset(event_type: str) -> dict:
+    csv_path = LOCATION_DATASETS.get(event_type)
+    if not csv_path:
+        raise HTTPException(400, "event_type must be planned or unplanned")
+    if not csv_path.exists():
+        raise HTTPException(500, f"Location dataset missing: {csv_path.name}")
+
+    rows = []
+    with csv_path.open(newline="", encoding="utf-8") as file:
+        reader = csv.DictReader(file)
+        for row in reader:
+            try:
+                lat = float(row["latitude"])
+                lng = float(row["longitude"])
+            except (TypeError, ValueError, KeyError):
+                continue
+
+            if math.isnan(lat) or math.isnan(lng):
+                continue
+
+            rows.append({
+                "latitude": lat,
+                "longitude": lng,
+                **{field: (row.get(field) or "").strip() for field in LOCATION_FIELDS},
+            })
+
+    if not rows:
+        raise HTTPException(500, f"No valid coordinates found in {csv_path.name}")
+
+    latitudes = [row["latitude"] for row in rows]
+    longitudes = [row["longitude"] for row in rows]
+    return {
+        "rows": rows,
+        "bounds": {
+            "min_latitude": min(latitudes),
+            "max_latitude": max(latitudes),
+            "min_longitude": min(longitudes),
+            "max_longitude": max(longitudes),
+        },
+    }
+
+
+def _nearest_location(event_type: str, latitude: float, longitude: float) -> dict:
+    dataset = _load_location_dataset(event_type)
+    bounds = dataset["bounds"]
+
+    if not (
+        bounds["min_latitude"] <= latitude <= bounds["max_latitude"]
+        and bounds["min_longitude"] <= longitude <= bounds["max_longitude"]
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": f"Coordinates are outside the {event_type} dataset range.",
+                "bounds": bounds,
+            },
+        )
+
+    nearest = min(
+        dataset["rows"],
+        key=lambda row: (row["latitude"] - latitude) ** 2 + (row["longitude"] - longitude) ** 2,
+    )
+    distance_km = _haversine_km(latitude, longitude, nearest["latitude"], nearest["longitude"])
+
+    return {
+        "event_type": event_type,
+        "input": {"latitude": latitude, "longitude": longitude},
+        "matched": nearest,
+        "distance_km": round(distance_km, 3),
+        "bounds": bounds,
+    }
+
+
+def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    radius_km = 6371.0
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    delta_phi = math.radians(lat2 - lat1)
+    delta_lambda = math.radians(lng2 - lng1)
+    a = (
+        math.sin(delta_phi / 2) ** 2
+        + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2) ** 2
+    )
+    return radius_km * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def _apply_dataset_location(payload, event_type: str) -> dict:
+    location = _nearest_location(event_type, payload.latitude, payload.longitude)
+    match = location["matched"]
+    return {
+        "address": payload.address or match["address"],
+        "corridor": match["corridor"] or "unknown",
+        "zone": match["zone"] or "unknown",
+        "junction": match["junction"] or "unknown",
+        "police_station": match["police_station"] or "unknown",
+    }
+
+
+@app.get("/location/lookup", tags=["Location"])
+def lookup_location(event_type: str, latitude: float, longitude: float):
+    """Find the nearest dataset row and return corridor, zone, junction, and station."""
+    return _nearest_location(event_type, latitude, longitude)
 
 
 # ── WebSocket ─────────────────────────────────────────────────────────────────
@@ -80,24 +196,25 @@ async def submit_planned_event(payload: PlannedEventSubmit, db: Session = Depend
     No ML decision yet — just stores for review.
     """
     event_id = str(uuid.uuid4())
+    location = _apply_dataset_location(payload, "planned")
     ev = PlannedEvent(
         id                  = event_id,
         event_cause         = payload.event_cause,
         event_name          = payload.event_name,
         organizer_name      = payload.organizer_name,
         expected_crowd_size = payload.expected_crowd_size,
-        address             = payload.address,
+        address             = location["address"],
         latitude            = payload.latitude,
         longitude           = payload.longitude,
-        corridor            = payload.corridor,
-        zone                = payload.zone,
-        junction            = payload.junction,
+        corridor            = location["corridor"],
+        zone                = location["zone"],
+        junction            = location["junction"],
         start_datetime      = payload.start_datetime,
         end_datetime        = payload.end_datetime,
         requires_road_closure = payload.requires_road_closure,
         priority            = payload.priority,
         description         = payload.description,
-        police_station      = payload.police_station,
+        police_station      = location["police_station"],
         submitted_by        = payload.submitted_by,
         status              = "pending_approval",
     )
@@ -108,7 +225,7 @@ async def submit_planned_event(payload: PlannedEventSubmit, db: Session = Depend
         "type":     "planned_submitted",
         "event_id": event_id,
         "cause":    payload.event_cause,
-        "address":  payload.address,
+        "address":  location["address"],
         "status":   "pending_approval",
     })
 
@@ -273,6 +390,7 @@ async def report_unplanned(payload: UnplannedEventReport, db: Session = Depends(
     """
     now = datetime.now(timezone.utc)
     event_id = str(uuid.uuid4())
+    location = _apply_dataset_location(payload, "unplanned")
 
     # Instant ML decision
     try:
@@ -280,8 +398,8 @@ async def report_unplanned(payload: UnplannedEventReport, db: Session = Depends(
         decision = unplanned_predict(
             event_cause           = payload.event_cause,
             veh_type              = payload.veh_type or "unknown",
-            corridor              = payload.corridor or "unknown",
-            zone                  = payload.zone or "unknown",
+            corridor              = location["corridor"],
+            zone                  = location["zone"],
             priority              = payload.priority,
             latitude              = payload.latitude,
             longitude             = payload.longitude,
@@ -302,17 +420,17 @@ async def report_unplanned(payload: UnplannedEventReport, db: Session = Depends(
     ev = UnplannedEvent(
         id                    = event_id,
         event_cause           = payload.event_cause,
-        address               = payload.address,
+        address               = location["address"],
         latitude              = payload.latitude,
         longitude             = payload.longitude,
-        corridor              = payload.corridor,
-        zone                  = payload.zone,
-        junction              = payload.junction,
+        corridor              = location["corridor"],
+        zone                  = location["zone"],
+        junction              = location["junction"],
         veh_type              = payload.veh_type,
         requires_road_closure = payload.requires_road_closure,
         priority              = payload.priority,
         description           = payload.description,
-        police_station        = payload.police_station,
+        police_station        = location["police_station"],
         reported_by           = payload.reported_by,
         start_datetime        = now,
         start_hour            = now.hour,
@@ -334,7 +452,7 @@ async def report_unplanned(payload: UnplannedEventReport, db: Session = Depends(
         "duration_min": decision["duration_min"],
         "manpower":     decision["manpower"],
         "action":       decision["action"],
-        "address":      payload.address,
+        "address":      location["address"],
         "lat":          payload.latitude,
         "lng":          payload.longitude,
     })

@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { post, put } from '../utils/api'
+import { useEffect, useState } from 'react'
+import { get, post, put } from '../utils/api'
 
 const initialForm = {
   event_cause: 'vehicle_breakdown',
@@ -31,6 +31,7 @@ export default function LiveIncident() {
   const [decision, setDecision] = useState(null)
   const [eventId, setEventId] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [locationStatus, setLocationStatus] = useState(null)
   const [resolved, setResolved] = useState(false)
   const [error, setError] = useState(null)
 
@@ -38,6 +39,70 @@ export default function LiveIncident() {
     const value = event.target.type === 'checkbox' ? event.target.checked : event.target.value
     setForm(current => ({ ...current, [key]: value }))
   }
+
+  useEffect(() => {
+    if (!form.latitude || !form.longitude) {
+      setLocationStatus(null)
+      return
+    }
+
+    const latitude = Number(form.latitude)
+    const longitude = Number(form.longitude)
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      setLocationStatus({ type: 'error', message: 'Enter valid latitude and longitude.' })
+      return
+    }
+
+    const controller = new AbortController()
+    const timer = window.setTimeout(async () => {
+      setLocationStatus({ type: 'loading', message: 'Matching coordinates with unplanned dataset...' })
+      try {
+        const params = new URLSearchParams({
+          event_type: 'unplanned',
+          latitude: String(latitude),
+          longitude: String(longitude),
+        })
+        const response = await get(`/location/lookup?${params.toString()}`, { signal: controller.signal })
+        const match = response.matched
+        setForm(current => {
+          if (current.latitude !== form.latitude || current.longitude !== form.longitude) {
+            return current
+          }
+          return {
+            ...current,
+            corridor: match.corridor || 'unknown',
+            zone: match.zone || 'unknown',
+            junction: match.junction || 'unknown',
+            police_station: match.police_station || 'unknown',
+          }
+        })
+        setLocationStatus({
+          type: 'success',
+          message: `Matched nearest dataset point ${response.distance_km} km away.`,
+        })
+      } catch (lookupError) {
+        if (lookupError.name === 'AbortError') return
+        setForm(current => ({
+          ...current,
+          corridor: '',
+          zone: '',
+          junction: '',
+          police_station: '',
+        }))
+        setLocationStatus({
+          type: 'error',
+          message: lookupError.message.includes('outside')
+            ? 'Coordinates are outside the unplanned dataset range.'
+            : lookupError.message,
+        })
+      }
+    }, 450)
+
+    return () => {
+      window.clearTimeout(timer)
+      controller.abort()
+    }
+  }, [form.latitude, form.longitude])
 
   async function report(event) {
     event.preventDefault()
@@ -116,16 +181,16 @@ export default function LiveIncident() {
               <input className="control" type="number" step="any" value={form.longitude} onChange={set('longitude')} placeholder="77.5946" />
             </Field>
             <Field label="Corridor">
-              <input className="control" value={form.corridor} onChange={set('corridor')} placeholder="ORR East 1" />
+              <input className="control" value={form.corridor} readOnly placeholder="Auto-filled from dataset" />
             </Field>
             <Field label="Zone">
-              <input className="control" value={form.zone} onChange={set('zone')} placeholder="Whitefield" />
+              <input className="control" value={form.zone} readOnly placeholder="Auto-filled from dataset" />
             </Field>
             <Field label="Junction">
-              <input className="control" value={form.junction} onChange={set('junction')} placeholder="Nearest junction" />
+              <input className="control" value={form.junction} readOnly placeholder="Auto-filled from dataset" />
             </Field>
             <Field label="Police station">
-              <input className="control" value={form.police_station} onChange={set('police_station')} placeholder="Nearest police station" />
+              <input className="control" value={form.police_station} readOnly placeholder="Auto-filled from dataset" />
             </Field>
             <Field label="Priority">
               <select className="control" value={form.priority} onChange={set('priority')}>
@@ -147,6 +212,7 @@ export default function LiveIncident() {
             </Field>
           </div>
 
+          {locationStatus && <div className={`alert ${locationStatus.type === 'error' ? 'error' : 'info'}`}>{locationStatus.message}</div>}
           {error && <div className="alert error">{error}</div>}
           <div className="actions">
             {!decision && <button className="btn danger" disabled={loading}>{loading ? 'Reporting...' : 'Report incident'}</button>}
