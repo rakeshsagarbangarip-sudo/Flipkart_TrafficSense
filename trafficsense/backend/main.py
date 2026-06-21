@@ -448,6 +448,13 @@ def export_unplanned_dataset(db: Session = Depends(get_db)):
     )
 
 
+@app.get("/")
+def root():
+    return {
+        "message": "TrafficSense API is running successfully",
+        "docs": "/docs",
+        "health": "/health"
+    }
 # ── Health ────────────────────────────────────────────────────────────────────
 
 @app.get("/health", tags=["System"])
