@@ -133,9 +133,10 @@ def _nearest_location(event_type: str, latitude: float, longitude: float) -> dic
     field_sources = {}
 
     for field in ("corridor", "zone", "junction", "police_station"):
-        source = _nearest_row_with_value(dataset["rows"], latitude, longitude, field)
+        source = _nearest_field_source(event_type, latitude, longitude, field)
         resolved_fields[field] = source[field] if source else "unknown"
         field_sources[field] = {
+            "event_type": source["event_type"],
             "latitude": source["latitude"],
             "longitude": source["longitude"],
             "address": source["address"],
@@ -173,6 +174,25 @@ def _nearest_row_with_value(rows: list, latitude: float, longitude: float, field
     if not candidates:
         return None
     return _nearest_row(candidates, latitude, longitude)
+
+
+def _nearest_field_source(event_type: str, latitude: float, longitude: float, field: str) -> Optional[dict]:
+    dataset_order = [event_type] + [kind for kind in LOCATION_DATASETS if kind != event_type]
+    best_source = None
+    best_distance = None
+
+    for kind in dataset_order:
+        dataset = _load_location_dataset(kind)
+        source = _nearest_row_with_value(dataset["rows"], latitude, longitude, field)
+        if not source:
+            continue
+
+        distance = _haversine_km(latitude, longitude, source["latitude"], source["longitude"])
+        if best_distance is None or distance < best_distance:
+            best_source = {**source, "event_type": kind}
+            best_distance = distance
+
+    return best_source
 
 
 def _is_unknown(value: Optional[str]) -> bool:
