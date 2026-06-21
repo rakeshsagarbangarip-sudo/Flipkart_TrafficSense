@@ -215,6 +215,7 @@ async def approve_planned_event(event_id: str, payload: ApprovalAction, db: Sess
     return {"status": "approved", "decision": decision}
 
 
+
 @app.post("/planned/{event_id}/feedback", tags=["Planned Events"])
 async def planned_feedback(event_id: str, payload: PlannedFeedback, db: Session = Depends(get_db)):
     """
@@ -352,6 +353,30 @@ async def resolve_unplanned(event_id: str, payload: UnplannedResolve, db: Sessio
 
     return {"status": "resolved", "duration_min": ev.duration_min}
 
+@app.delete("/unplanned/{event_id}", tags=["Unplanned Events"])
+def delete_unplanned(event_id: str, db: Session = Depends(get_db)):
+    """
+    Permanently delete an unplanned incident from the database.
+    """
+
+    ev = db.query(UnplannedEvent).filter(
+        UnplannedEvent.id == event_id
+    ).first()
+
+    if not ev:
+        raise HTTPException(
+            status_code=404,
+            detail="Incident not found"
+        )
+
+    db.delete(ev)
+    db.commit()
+
+    return {
+        "success": True,
+        "message": "Incident deleted successfully",
+        "deleted_id": event_id
+    }
 
 @app.post("/unplanned/{event_id}/feedback", tags=["Unplanned Events"])
 async def unplanned_feedback(event_id: str, payload: UnplannedFeedback, db: Session = Depends(get_db)):
