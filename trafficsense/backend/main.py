@@ -55,6 +55,7 @@ LOCATION_DATASETS = {
 }
 
 LOCATION_FIELDS = ("corridor", "zone", "junction", "police_station", "address")
+UNKNOWN_VALUES = {"", "unknown", "n/a", "na", "none", "null", "-"}
 
 async def broadcast(event: dict):
     dead = []
@@ -126,19 +127,56 @@ def _nearest_location(event_type: str, latitude: float, longitude: float) -> dic
             },
         )
 
-    nearest = min(
-        dataset["rows"],
-        key=lambda row: (row["latitude"] - latitude) ** 2 + (row["longitude"] - longitude) ** 2,
-    )
+    nearest = _nearest_row(dataset["rows"], latitude, longitude)
     distance_km = _haversine_km(latitude, longitude, nearest["latitude"], nearest["longitude"])
+    resolved_fields = {}
+    field_sources = {}
+
+    for field in ("corridor", "zone", "junction", "police_station"):
+        source = _nearest_row_with_value(dataset["rows"], latitude, longitude, field)
+        resolved_fields[field] = source[field] if source else "unknown"
+        field_sources[field] = {
+            "latitude": source["latitude"],
+            "longitude": source["longitude"],
+            "address": source["address"],
+            "distance_km": round(
+                _haversine_km(latitude, longitude, source["latitude"], source["longitude"]),
+                3,
+            ),
+        } if source else None
 
     return {
         "event_type": event_type,
         "input": {"latitude": latitude, "longitude": longitude},
-        "matched": nearest,
+        "matched": {**nearest, **resolved_fields},
+        "nearest_place": {
+            "address": nearest["address"],
+            "latitude": nearest["latitude"],
+            "longitude": nearest["longitude"],
+            "distance_km": round(distance_km, 3),
+        },
+        "field_sources": field_sources,
         "distance_km": round(distance_km, 3),
         "bounds": bounds,
     }
+
+
+def _nearest_row(rows: list, latitude: float, longitude: float) -> dict:
+    return min(
+        rows,
+        key=lambda row: (row["latitude"] - latitude) ** 2 + (row["longitude"] - longitude) ** 2,
+    )
+
+
+def _nearest_row_with_value(rows: list, latitude: float, longitude: float, field: str) -> Optional[dict]:
+    candidates = [row for row in rows if not _is_unknown(row.get(field))]
+    if not candidates:
+        return None
+    return _nearest_row(candidates, latitude, longitude)
+
+
+def _is_unknown(value: Optional[str]) -> bool:
+    return str(value or "").strip().lower() in UNKNOWN_VALUES
 
 
 def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:

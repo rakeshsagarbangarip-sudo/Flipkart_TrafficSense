@@ -320,6 +320,16 @@ textarea.control {
   font-weight: 700;
 }
 
+.coordinate-helper {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 42px;
+  color: #657187;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .actions {
   display: flex;
   gap: 12px;
@@ -345,6 +355,11 @@ textarea.control {
   border: 1px solid #cfd9e8;
   background: #fff;
   color: #27364f;
+}
+
+.btn.compact {
+  min-height: 36px;
+  padding: 8px 12px;
 }
 
 .btn.success { background: #15803d; }

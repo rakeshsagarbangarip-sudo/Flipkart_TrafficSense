@@ -42,6 +42,28 @@ export default function PlannedPortal() {
     setForm(current => ({ ...current, [key]: value }))
   }
 
+  function useCurrentLocation() {
+    if (!navigator.geolocation) {
+      setLocationStatus({ type: 'error', message: 'Location access is not available in this browser.' })
+      return
+    }
+
+    setLocationStatus({ type: 'loading', message: 'Getting current GPS location...' })
+    navigator.geolocation.getCurrentPosition(
+      position => {
+        setForm(current => ({
+          ...current,
+          latitude: position.coords.latitude.toFixed(6),
+          longitude: position.coords.longitude.toFixed(6),
+        }))
+      },
+      () => {
+        setLocationStatus({ type: 'error', message: 'Allow location permission or enter latitude and longitude manually.' })
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    )
+  }
+
   useEffect(() => {
     if (!form.latitude || !form.longitude) {
       setLocationStatus(null)
@@ -78,9 +100,12 @@ export default function PlannedPortal() {
             police_station: match.police_station || 'unknown',
           }
         })
+        const nearestPlace = response.nearest_place?.address
         setLocationStatus({
           type: 'success',
-          message: `Matched nearest dataset point ${response.distance_km} km away.`,
+          message: nearestPlace
+            ? `Nearest place: ${nearestPlace} (${response.distance_km} km away).`
+            : `Matched nearest dataset point ${response.distance_km} km away.`,
         })
       } catch (lookupError) {
         if (lookupError.name === 'AbortError') return
@@ -186,10 +211,18 @@ export default function PlannedPortal() {
           <Field label="Longitude">
             <input className="control" type="number" step="any" value={form.longitude} onChange={set('longitude')} placeholder="77.5946" />
           </Field>
-          <Field label="Corridor">
+          <Field span>
+            <div className="coordinate-helper">
+              <button className="btn secondary compact" type="button" onClick={useCurrentLocation}>
+                Use my current location
+              </button>
+              <span>Or copy latitude and longitude from Google Maps by right-clicking the place.</span>
+            </div>
+          </Field>
+          <Field label="Corridor nearest">
             <input className="control" value={form.corridor} readOnly placeholder="Auto-filled from dataset" />
           </Field>
-          <Field label="Zone">
+          <Field label="Zone nearest">
             <input className="control" value={form.zone} readOnly placeholder="Auto-filled from dataset" />
           </Field>
           <Field label="Nearest junction">
